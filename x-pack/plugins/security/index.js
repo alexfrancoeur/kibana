@@ -21,7 +21,7 @@ import { SecurityAuditLogger } from './server/lib/audit_logger';
 import { AuditLogger } from '../../server/lib/audit_logger';
 import { SecureSavedObjectsClient } from './server/lib/saved_objects_client/secure_saved_objects_client';
 import { initAuthorizationService, registerPrivilegesWithCluster } from './server/lib/authorization';
-import { watchStatusAndLicenseToInitialize } from './server/lib/watch_status_and_license_to_initialize';
+import { watchStatusAndLicenseToInitialize } from '../../server/lib/watch_status_and_license_to_initialize';
 
 export const security = (kibana) => new kibana.Plugin({
   id: 'security',
@@ -78,6 +78,7 @@ export const security = (kibana) => new kibana.Plugin({
       return {
         secureCookies: config.get('xpack.security.secureCookies'),
         sessionTimeout: config.get('xpack.security.sessionTimeout'),
+        enableSpaceAwarePrivileges: config.get('xpack.spaces.enabled'),
       };
     }
   },
@@ -156,6 +157,7 @@ export const security = (kibana) => new kibana.Plugin({
     initLogoutView(server);
 
     server.injectUiAppVars('login', () => {
+
       const { showLogin, loginMessage, allowLogin, layout = 'form' } = xpackInfo.feature(plugin.id).getLicenseCheckResults() || {};
 
       return {
