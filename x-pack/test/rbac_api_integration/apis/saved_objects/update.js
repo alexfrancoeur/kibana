@@ -5,7 +5,7 @@
  */
 
 import expect from 'expect.js';
-import { AUTHENTICATION } from './lib/authentication';
+import { AUTHENTICATION } from '../lib/authentication';
 
 export default function ({ getService }) {
   const supertest = getService('supertestWithoutAuth');
@@ -46,19 +46,19 @@ export default function ({ getService }) {
       });
     };
 
-    const createExpectLegacyForbidden = username => resp => {
+    const createExpectLegacyForbidden = (username, action) => resp => {
       expect(resp.body).to.eql({
         statusCode: 403,
         error: 'Forbidden',
         //eslint-disable-next-line max-len
-        message: `action [indices:data/write/update] is unauthorized for user [${username}]: [security_exception] action [indices:data/write/update] is unauthorized for user [${username}]`
+        message: `action [indices:data/${action}] is unauthorized for user [${username}]: [security_exception] action [indices:data/${action}] is unauthorized for user [${username}]`
       });
     };
 
     const updateTest = (description, { auth, tests }) => {
       describe(description, () => {
-        before(() => esArchiver.load('saved_objects/basic'));
-        after(() => esArchiver.unload('saved_objects/basic'));
+        before(() => esArchiver.load('saved_objects/spaces'));
+        after(() => esArchiver.unload('saved_objects/spaces'));
         it(`should return ${tests.exists.statusCode}`, async () => {
           await supertest
             .put(`/api/saved_objects/visualization/dd7caf20-9efd-11e7-acb3-3dab96693fab`)
@@ -97,11 +97,11 @@ export default function ({ getService }) {
       tests: {
         exists: {
           statusCode: 403,
-          response: expectRbacForbidden,
+          response: createExpectLegacyForbidden(AUTHENTICATION.NOT_A_KIBANA_USER.USERNAME, 'read/get'),
         },
         doesntExist: {
           statusCode: 403,
-          response: expectRbacForbidden,
+          response: createExpectLegacyForbidden(AUTHENTICATION.NOT_A_KIBANA_USER.USERNAME, 'read/get'),
         },
       }
     });
@@ -148,11 +148,14 @@ export default function ({ getService }) {
       tests: {
         exists: {
           statusCode: 403,
-          response: createExpectLegacyForbidden(AUTHENTICATION.KIBANA_LEGACY_DASHBOARD_ONLY_USER.USERNAME),
+          response: createExpectLegacyForbidden(AUTHENTICATION.KIBANA_LEGACY_DASHBOARD_ONLY_USER.USERNAME, 'write/update'),
         },
+        // We're executing the get before a delete here to ensure the object is in the right space, and it's
+        // not found. This is somewhat confusing, but the user is authorized to GET objects so it's not disclosing
+        // the existence of an object they shouldn't be able to see.
         doesntExist: {
-          statusCode: 403,
-          response: createExpectLegacyForbidden(AUTHENTICATION.KIBANA_LEGACY_DASHBOARD_ONLY_USER.USERNAME),
+          statusCode: 404,
+          response: expectNotFound,
         },
       }
     });

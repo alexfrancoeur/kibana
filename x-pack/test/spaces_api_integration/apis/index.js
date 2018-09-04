@@ -7,5 +7,6 @@
 export default function ({ loadTestFile }) {
   describe('apis spaces', () => {
     loadTestFile(require.resolve('./saved_objects'));
+    loadTestFile(require.resolve('./spaces'));
   });
 }

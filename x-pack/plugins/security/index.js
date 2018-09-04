@@ -19,9 +19,10 @@ import { initAuthenticator } from './server/lib/authentication/authenticator';
 import { initPrivilegesApi } from './server/routes/api/v1/privileges';
 import { SecurityAuditLogger } from './server/lib/audit_logger';
 import { AuditLogger } from '../../server/lib/audit_logger';
-import { SecureSavedObjectsClient } from './server/lib/saved_objects_client/secure_saved_objects_client';
-import { initAuthorizationService, registerPrivilegesWithCluster } from './server/lib/authorization';
+import { createAuthorizationService, registerPrivilegesWithCluster } from './server/lib/authorization';
 import { watchStatusAndLicenseToInitialize } from '../../server/lib/watch_status_and_license_to_initialize';
+import { SecureSavedObjectsClientWrapper } from './server/lib/saved_objects_client/secure_saved_objects_client_wrapper';
+import { deepFreeze } from './server/lib/deep_freeze';
 
 export const security = (kibana) => new kibana.Plugin({
   id: 'security',
@@ -106,7 +107,8 @@ export const security = (kibana) => new kibana.Plugin({
     server.auth.strategy('session', 'login', 'required');
 
     // exposes server.plugins.security.authorization
-    initAuthorizationService(server);
+    const authorization = createAuthorizationService(server, xpackInfoFeature);
+    server.expose('authorization', deepFreeze(authorization));
 
     watchStatusAndLicenseToInitialize(xpackMainPlugin, plugin, async (license) => {
       if (license.allowRbac) {
@@ -124,30 +126,37 @@ export const security = (kibana) => new kibana.Plugin({
       const { callWithRequest, callWithInternalUser } = adminCluster;
       const callCluster = (...args) => callWithRequest(request, ...args);
 
-      const callWithRequestRepository = savedObjects.getSavedObjectsRepository(callCluster);
-
-      if (!xpackInfoFeature.getLicenseCheckResults().allowRbac) {
-        return new savedObjects.SavedObjectsClient(callWithRequestRepository);
+      if (authorization.mode.useRbacForRequest(request)) {
+        const internalRepository = savedObjects.getSavedObjectsRepository(callWithInternalUser);
+        return new savedObjects.SavedObjectsClient(internalRepository);
       }
 
-      const { authorization } = server.plugins.security;
-      const checkPrivileges = authorization.checkPrivilegesWithRequest(request);
-      const internalRepository = savedObjects.getSavedObjectsRepository(callWithInternalUser);
+      const callWithRequestRepository = savedObjects.getSavedObjectsRepository(callCluster);
+      return new savedObjects.SavedObjectsClient(callWithRequestRepository);
+    });
 
-      return new SecureSavedObjectsClient({
-        internalRepository,
-        callWithRequestRepository,
-        errors: savedObjects.SavedObjectsClient.errors,
-        checkPrivileges,
-        auditLogger,
-        savedObjectTypes: savedObjects.types,
-        actions: authorization.actions,
-      });
+    savedObjects.addScopedSavedObjectsClientWrapperFactory(Number.MIN_VALUE, ({ client, request }) => {
+      if (authorization.mode.useRbacForRequest(request)) {
+        const { spaces } = server.plugins;
+
+        return new SecureSavedObjectsClientWrapper({
+          actions: authorization.actions,
+          auditLogger,
+          baseClient: client,
+          checkPrivilegesWithRequest: authorization.checkPrivilegesWithRequest,
+          errors: savedObjects.SavedObjectsClient.errors,
+          request,
+          savedObjectTypes: savedObjects.types,
+          spaces,
+        });
+      }
+
+      return client;
     });
 
     getUserProvider(server);
 
-    await initAuthenticator(server);
+    await initAuthenticator(server, authorization.mode);
     initAuthenticateApi(server);
     initUsersApi(server);
     initPublicRolesApi(server);

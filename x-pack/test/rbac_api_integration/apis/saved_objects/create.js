@@ -5,7 +5,7 @@
  */
 
 import expect from 'expect.js';
-import { AUTHENTICATION } from './lib/authentication';
+import { AUTHENTICATION } from '../lib/authentication';
 
 export default function ({ getService }) {
   const supertest = getService('supertestWithoutAuth');
@@ -48,8 +48,8 @@ export default function ({ getService }) {
 
     const createTest = (description, { auth, tests }) => {
       describe(description, () => {
-        before(() => esArchiver.load('saved_objects/basic'));
-        after(() => esArchiver.unload('saved_objects/basic'));
+        before(() => esArchiver.load('saved_objects/spaces'));
+        after(() => esArchiver.unload('saved_objects/spaces'));
         it(`should return ${tests.default.statusCode}`, async () => {
           await supertest
             .post(`/api/saved_objects/visualization`)
@@ -73,7 +73,7 @@ export default function ({ getService }) {
       tests: {
         default: {
           statusCode: 403,
-          response: expectRbacForbidden,
+          response: createExpectLegacyForbidden(AUTHENTICATION.NOT_A_KIBANA_USER.USERNAME),
         },
       }
     });

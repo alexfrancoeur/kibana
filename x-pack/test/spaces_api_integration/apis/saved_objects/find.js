@@ -5,8 +5,8 @@
  */
 
 import expect from 'expect.js';
-import { SPACES } from './lib/spaces';
-import { getIdPrefix, getUrlPrefix } from './lib/space_test_utils';
+import { SPACES } from '../lib/spaces';
+import { getIdPrefix, getUrlPrefix } from '../lib/space_test_utils';
 
 export default function ({ getService }) {
   const supertest = getService('supertest');
@@ -44,23 +44,6 @@ export default function ({ getService }) {
         id: '7.0.0-alpha1',
         type: 'config',
         updated_at: '2017-09-21T18:49:16.302Z',
-        version: 3,
-      }, {
-        id: `default`,
-        type: 'space',
-        updated_at: '2017-09-21T18:49:16.270Z',
-        version: 1,
-      },
-      {
-        id: `space_1`,
-        type: 'space',
-        updated_at: '2017-09-21T18:49:16.270Z',
-        version: 1,
-      },
-      {
-        id: `space_2`,
-        type: 'space',
-        updated_at: '2017-09-21T18:49:16.270Z',
         version: 1,
       },
       {
@@ -87,7 +70,6 @@ export default function ({ getService }) {
       expectedSavedObjects.forEach((object, index) => {
         object.attributes = resp.body.saved_objects[index].attributes;
       });
-
 
       expect(resp.body).to.eql({
         page: 1,

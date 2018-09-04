@@ -5,7 +5,7 @@
  */
 
 import expect from 'expect.js';
-import { AUTHENTICATION } from './lib/authentication';
+import { AUTHENTICATION } from '../lib/authentication';
 
 export default function ({ getService }) {
   const supertest = getService('supertestWithoutAuth');
@@ -39,18 +39,19 @@ export default function ({ getService }) {
       });
     };
 
-    const expectRbacForbidden = resp => {
+    const createExpectLegacyForbidden = username => resp => {
       expect(resp.body).to.eql({
         statusCode: 403,
         error: 'Forbidden',
-        message: `Unable to get visualization, missing action:saved_objects/visualization/get`
+        // eslint-disable-next-line max-len
+        message: `action [indices:data/read/get] is unauthorized for user [${username}]: [security_exception] action [indices:data/read/get] is unauthorized for user [${username}]`
       });
     };
 
     const getTest = (description, { auth, tests }) => {
       describe(description, () => {
-        before(() => esArchiver.load('saved_objects/basic'));
-        after(() => esArchiver.unload('saved_objects/basic'));
+        before(() => esArchiver.load('saved_objects/spaces'));
+        after(() => esArchiver.unload('saved_objects/spaces'));
 
         it(`should return ${tests.exists.statusCode}`, async () => (
           await supertest
@@ -80,11 +81,11 @@ export default function ({ getService }) {
       tests: {
         exists: {
           statusCode: 403,
-          response: expectRbacForbidden,
+          response: createExpectLegacyForbidden(AUTHENTICATION.NOT_A_KIBANA_USER.USERNAME),
         },
         doesntExist: {
           statusCode: 403,
-          response: expectRbacForbidden,
+          response: createExpectLegacyForbidden(AUTHENTICATION.NOT_A_KIBANA_USER.USERNAME),
         },
       }
     });

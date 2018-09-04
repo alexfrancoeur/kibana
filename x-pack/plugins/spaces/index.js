@@ -16,6 +16,7 @@ import { wrapError } from './server/lib/errors';
 import mappings from './mappings.json';
 import { spacesSavedObjectsClientWrapperFactory } from './server/lib/saved_objects_client/saved_objects_client_wrapper_factory';
 import { watchStatusAndLicenseToInitialize } from '../../server/lib/watch_status_and_license_to_initialize';
+import { SpacesClient } from './server/lib/spaces_client';
 
 export const spaces = (kibana) => new kibana.Plugin({
   id: 'spaces',
@@ -80,10 +81,23 @@ export const spaces = (kibana) => new kibana.Plugin({
     validateConfig(config, message => server.log(['spaces', 'warning'], message));
 
     const spacesService = createSpacesService(server);
-    server.decorate('server', 'spaces', spacesService);
+    server.expose('getSpaceId', (request) => spacesService.getSpaceId(request));
+
+    server.expose('spacesClient', {
+      getScopedClient: (request) => {
+        const adminCluster = server.plugins.elasticsearch.getCluster('admin');
+        const { callWithRequest, callWithInternalUser } = adminCluster;
+        const callCluster = (...args) => callWithRequest(request, ...args);
+        const { savedObjects } = server;
+        const internalRepository = savedObjects.getSavedObjectsRepository(callWithInternalUser);
+        const callWithRequestRepository = savedObjects.getSavedObjectsRepository(callCluster);
+        const authorization = server.plugins.security ? server.plugins.security.authorization : null;
+        return new SpacesClient(authorization, callWithRequestRepository, internalRepository, request);
+      }
+    });
 
     const { addScopedSavedObjectsClientWrapperFactory, types } = server.savedObjects;
-    addScopedSavedObjectsClientWrapperFactory(
+    addScopedSavedObjectsClientWrapperFactory(Number.MAX_VALUE,
       spacesSavedObjectsClientWrapperFactory(spacesService, types)
     );
 

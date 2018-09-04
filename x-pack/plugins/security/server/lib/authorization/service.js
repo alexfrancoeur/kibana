@@ -5,20 +5,30 @@
  */
 
 import { actionsFactory } from './actions';
+import { authorizationModeFactory } from './mode';
 import { checkPrivilegesWithRequestFactory } from './check_privileges';
-import { deepFreeze } from './deep_freeze';
 import { getClient } from '../../../../../server/lib/get_client_shield';
 
-export function initAuthorizationService(server) {
+export function createAuthorizationService(server, xpackInfoFeature) {
   const shieldClient = getClient(server);
   const config = server.config();
 
   const actions = actionsFactory(config);
   const application = `kibana-${config.get('kibana.index')}`;
+  const checkPrivilegesWithRequest = checkPrivilegesWithRequestFactory(actions, application, shieldClient);
+  const mode = authorizationModeFactory(
+    actions,
+    checkPrivilegesWithRequest,
+    config,
+    server.plugins,
+    server.savedObjects,
+    xpackInfoFeature
+  );
 
-  server.expose('authorization', deepFreeze({
+  return {
     actions,
     application,
-    checkPrivilegesWithRequest: checkPrivilegesWithRequestFactory(shieldClient, config, actions, application),
-  }));
+    checkPrivilegesWithRequest,
+    mode,
+  };
 }

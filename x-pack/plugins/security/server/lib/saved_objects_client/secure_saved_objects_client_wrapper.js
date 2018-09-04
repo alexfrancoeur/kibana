@@ -5,55 +5,59 @@
  */
 
 import { get, uniq } from 'lodash';
-import { CHECK_PRIVILEGES_RESULT } from '../authorization/check_privileges';
 
-export class SecureSavedObjectsClient {
+export class SecureSavedObjectsClientWrapper {
   constructor(options) {
     const {
-      errors,
-      internalRepository,
-      callWithRequestRepository,
-      checkPrivileges,
-      auditLogger,
-      savedObjectTypes,
       actions,
+      auditLogger,
+      baseClient,
+      checkPrivilegesWithRequest,
+      errors,
+      request,
+      savedObjectTypes,
+      spaces,
     } = options;
 
     this.errors = errors;
-    this._internalRepository = internalRepository;
-    this._callWithRequestRepository = callWithRequestRepository;
-    this._checkPrivileges = checkPrivileges;
-    this._auditLogger = auditLogger;
-    this._savedObjectTypes = savedObjectTypes;
     this._actions = actions;
+    this._auditLogger = auditLogger;
+    this._baseClient = baseClient;
+    this._checkPrivileges = checkPrivilegesWithRequest(request);
+    this._request = request;
+    this._savedObjectTypes = savedObjectTypes;
+    this._spaces = spaces;
   }
 
   async create(type, attributes = {}, options = {}) {
-    return await this._execute(
+    await this._ensureAuthorized(
       type,
       'create',
       { type, attributes, options },
-      repository => repository.create(type, attributes, options),
     );
+
+    return await this._baseClient.create(type, attributes, options);
   }
 
   async bulkCreate(objects, options = {}) {
     const types = uniq(objects.map(o => o.type));
-    return await this._execute(
+    await this._ensureAuthorized(
       types,
       'bulk_create',
       { objects, options },
-      repository => repository.bulkCreate(objects, options),
     );
+
+    return await this._baseClient.bulkCreate(objects, options);
   }
 
   async delete(type, id) {
-    return await this._execute(
+    await this._ensureAuthorized(
       type,
       'delete',
       { type, id },
-      repository => repository.delete(type, id),
     );
+
+    return await this._baseClient.delete(type, id);
   }
 
   async find(options = {}) {
@@ -66,58 +70,68 @@ export class SecureSavedObjectsClient {
 
   async bulkGet(objects = [], options = {}) {
     const types = uniq(objects.map(o => o.type));
-    return await this._execute(
+    await this._ensureAuthorized(
       types,
       'bulk_get',
       { objects, options },
-      repository => repository.bulkGet(objects, options)
     );
+
+    return await this._baseClient.bulkGet(objects, options);
   }
 
   async get(type, id, options = {}) {
-    return await this._execute(
+    await this._ensureAuthorized(
       type,
       'get',
       { type, id, options },
-      repository => repository.get(type, id, options)
     );
+
+    return await this._baseClient.get(type, id, options);
   }
 
   async update(type, id, attributes, options = {}) {
-    return await this._execute(
+    await this._ensureAuthorized(
       type,
       'update',
       { type, id, attributes, options },
-      repository => repository.update(type, id, attributes, options)
     );
+
+    return await this._baseClient.update(type, id, attributes, options);
   }
 
   async _checkSavedObjectPrivileges(actions) {
     try {
-      return await this._checkPrivileges(actions);
+      if (this._spaces) {
+        const spaceId = this._spaces.getSpaceId(this._request);
+        return await this._checkPrivileges.atSpace(spaceId, actions);
+      }
+      else {
+        return await this._checkPrivileges.globally(actions);
+      }
     } catch(error) {
       const { reason } = get(error, 'body.error', {});
       throw this.errors.decorateGeneralError(error, reason);
     }
   }
 
-  async _execute(typeOrTypes, action, args, fn) {
+  async _ensureAuthorized(typeOrTypes, action, args) {
     const types = Array.isArray(typeOrTypes) ? typeOrTypes : [typeOrTypes];
     const actions = types.map(type => this._actions.getSavedObjectAction(type, action));
-    const { result, username, missing } = await this._checkSavedObjectPrivileges(actions);
+    const { hasAllRequested, username, privileges } = await this._checkSavedObjectPrivileges(actions);
 
-    switch (result) {
-      case CHECK_PRIVILEGES_RESULT.AUTHORIZED:
-        this._auditLogger.savedObjectsAuthorizationSuccess(username, action, types, args);
-        return await fn(this._internalRepository);
-      case CHECK_PRIVILEGES_RESULT.LEGACY:
-        return await fn(this._callWithRequestRepository);
-      case CHECK_PRIVILEGES_RESULT.UNAUTHORIZED:
-        this._auditLogger.savedObjectsAuthorizationFailure(username, action, types, missing, args);
-        const msg = `Unable to ${action} ${[...types].sort().join(',')}, missing ${[...missing].sort().join(',')}`;
-        throw this.errors.decorateForbiddenError(new Error(msg));
-      default:
-        throw new Error('Unexpected result from hasPrivileges');
+    if (hasAllRequested) {
+      this._auditLogger.savedObjectsAuthorizationSuccess(username, action, types, args);
+    } else {
+      const missing = this._getMissingPrivileges(privileges);
+      this._auditLogger.savedObjectsAuthorizationFailure(
+        username,
+        action,
+        types,
+        missing,
+        args
+      );
+      const msg = `Unable to ${action} ${[...types].sort().join(',')}, missing ${[...missing].sort().join(',')}`;
+      throw this.errors.decorateForbiddenError(new Error(msg));
     }
   }
 
@@ -127,14 +141,10 @@ export class SecureSavedObjectsClient {
     // we have to filter for only their authorized types
     const types = this._savedObjectTypes;
     const typesToPrivilegesMap = new Map(types.map(type => [type, this._actions.getSavedObjectAction(type, action)]));
-    const { result, username, missing } = await this._checkSavedObjectPrivileges(Array.from(typesToPrivilegesMap.values()));
-
-    if (result === CHECK_PRIVILEGES_RESULT.LEGACY) {
-      return await this._callWithRequestRepository.find(options);
-    }
+    const { username, privileges } = await this._checkSavedObjectPrivileges(Array.from(typesToPrivilegesMap.values()));
 
     const authorizedTypes = Array.from(typesToPrivilegesMap.entries())
-      .filter(([, privilege]) => !missing.includes(privilege))
+      .filter(([, privilege]) => privileges[privilege])
       .map(([type]) => type);
 
     if (authorizedTypes.length === 0) {
@@ -142,26 +152,36 @@ export class SecureSavedObjectsClient {
         username,
         action,
         types,
-        missing,
+        this._getMissingPrivileges(privileges),
         { options }
       );
       throw this.errors.decorateForbiddenError(new Error(`Not authorized to find saved_object`));
     }
 
-    this._auditLogger.savedObjectsAuthorizationSuccess(username, action, authorizedTypes, { options });
+    this._auditLogger.savedObjectsAuthorizationSuccess(username, action, authorizedTypes, {
+      options: {
+        ...options,
+        type: authorizedTypes,
+      }
+    });
 
-    return await this._internalRepository.find({
+    return await this._baseClient.find({
       ...options,
       type: authorizedTypes
     });
   }
 
   async _findWithTypes(options) {
-    return await this._execute(
+    await this._ensureAuthorized(
       options.type,
       'find',
       { options },
-      repository => repository.find(options)
     );
+
+    return await this._baseClient.find(options);
+  }
+
+  _getMissingPrivileges(response) {
+    return Object.keys(response).filter(privilege => !response[privilege]);
   }
 }

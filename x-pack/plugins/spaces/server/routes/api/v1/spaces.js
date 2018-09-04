@@ -4,44 +4,27 @@
  * you may not use this file except in compliance with the Elastic License.
  */
 
-import Boom from 'boom';
-import { omit } from 'lodash';
 import { routePreCheckLicense } from '../../../lib/route_pre_check_license';
 import { spaceSchema } from '../../../lib/space_schema';
 import { wrapError } from '../../../lib/errors';
-import { isReservedSpace } from '../../../../common/is_reserved_space';
 import { addSpaceIdToPath } from '../../../lib/spaces_url_parser';
 
 export function initSpacesApi(server) {
   const routePreCheckLicenseFn = routePreCheckLicense(server);
 
-  function convertSavedObjectToSpace(savedObject) {
-    return {
-      id: savedObject.id,
-      ...savedObject.attributes
-    };
-  }
-
   server.route({
     method: 'GET',
     path: '/api/spaces/v1/spaces',
     async handler(request, reply) {
-      const client = request.getSavedObjectsClient();
 
-      let spaces;
+      const spacesClient = server.plugins.spaces.spacesClient.getScopedClient(request);
 
       try {
-        const result = await client.find({
-          type: 'space',
-          sortField: 'name.keyword',
-        });
-
-        spaces = result.saved_objects.map(convertSavedObjectToSpace);
+        const spaces = await spacesClient.getAll();
+        return reply(spaces);
       } catch (error) {
         return reply(wrapError(error));
       }
-
-      return reply(spaces);
     },
     config: {
       pre: [routePreCheckLicenseFn]
@@ -54,12 +37,12 @@ export function initSpacesApi(server) {
     async handler(request, reply) {
       const spaceId = request.params.id;
 
-      const client = request.getSavedObjectsClient();
+      const spacesClient = server.plugins.spaces.spacesClient.getScopedClient(request);
 
       try {
-        const response = await client.get('space', spaceId);
+        const space = await spacesClient.get(spaceId);
 
-        return reply(convertSavedObjectToSpace(response));
+        return reply(space);
       } catch (error) {
         return reply(wrapError(error));
       }
@@ -73,19 +56,11 @@ export function initSpacesApi(server) {
     method: 'POST',
     path: '/api/spaces/v1/space',
     async handler(request, reply) {
-      const client = request.getSavedObjectsClient();
-
-      const space = omit(request.payload, ['id', '_reserved']);
-
-      const id = request.payload.id;
-
-      const existingSpace = await getSpaceById(client, id);
-      if (existingSpace) {
-        return reply(Boom.conflict(`A space with the identifier ${id} already exists. Please choose a different identifier`));
-      }
+      const spacesClient = server.plugins.spaces.spacesClient.getScopedClient(request);
+      const space = request.payload;
 
       try {
-        return reply(await client.create('space', { ...space }, { id, overwrite: false }));
+        return reply(await spacesClient.create(space));
       } catch (error) {
         return reply(wrapError(error));
       }
@@ -103,28 +78,16 @@ export function initSpacesApi(server) {
     method: 'PUT',
     path: '/api/spaces/v1/space/{id}',
     async handler(request, reply) {
-      const client = request.getSavedObjectsClient();
-
-      const space = omit(request.payload, ['id']);
+      const spacesClient = server.plugins.spaces.spacesClient.getScopedClient(request);
+      const space = request.payload;
       const id = request.params.id;
 
-      const existingSpace = await getSpaceById(client, id);
-
-      if (existingSpace) {
-        space._reserved = existingSpace._reserved;
-      } else {
-        return reply(Boom.notFound(`Unable to find space with ID ${id}`));
-      }
-
-      let result;
       try {
-        result = await client.update('space', id, { ...space });
+        const response = spacesClient.update(id, space);
+        return reply(response);
       } catch (error) {
         return reply(wrapError(error));
       }
-
-      const updatedSpace = convertSavedObjectToSpace(result);
-      return reply(updatedSpace);
     },
     config: {
       validate: {
@@ -138,24 +101,15 @@ export function initSpacesApi(server) {
     method: 'DELETE',
     path: '/api/spaces/v1/space/{id}',
     async handler(request, reply) {
-      const client = request.getSavedObjectsClient();
-
+      const spacesClient = server.plugins.spaces.spacesClient.getScopedClient(request);
       const id = request.params.id;
 
-      let result;
-
       try {
-        const existingSpace = await getSpaceById(client, id);
-        if (isReservedSpace(existingSpace)) {
-          return reply(wrapError(Boom.badRequest('This Space cannot be deleted because it is reserved.')));
-        }
-
-        result = await client.delete('space', id);
+        await spacesClient.delete(id);
+        return reply().code(204);
       } catch (error) {
         return reply(wrapError(error));
       }
-
-      return reply(result).code(204);
     },
     config: {
       pre: [routePreCheckLicenseFn]
@@ -166,17 +120,16 @@ export function initSpacesApi(server) {
     method: 'POST',
     path: '/api/spaces/v1/space/{id}/select',
     async handler(request, reply) {
-      const client = request.getSavedObjectsClient();
-
+      const spacesClient = server.plugins.spaces.spacesClient.getScopedClient(request);
       const id = request.params.id;
 
       try {
-        const existingSpace = await getSpaceById(client, id);
+        const space = await spacesClient.get(id);
 
         const config = server.config();
 
         return reply({
-          location: addSpaceIdToPath(config.get('server.basePath'), existingSpace.id, config.get('server.defaultRoute'))
+          location: addSpaceIdToPath(config.get('server.basePath'), space.id, config.get('server.defaultRoute'))
         });
 
       } catch (error) {
@@ -184,19 +137,4 @@ export function initSpacesApi(server) {
       }
     }
   });
-
-  async function getSpaceById(client, spaceId) {
-    try {
-      const existingSpace = await client.get('space', spaceId);
-      return {
-        id: existingSpace.id,
-        ...existingSpace.attributes
-      };
-    } catch (error) {
-      if (client.errors.isNotFoundError(error)) {
-        return null;
-      }
-      throw error;
-    }
-  }
 }
